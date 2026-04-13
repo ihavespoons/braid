@@ -4,6 +4,35 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+
+	"github.com/charmbracelet/lipgloss"
+)
+
+// Display palette for parsed claude stream events. Lipgloss auto-detects
+// the output's color profile and degrades to plain text when stdout is
+// not a TTY, so these styles are safe in piped/log contexts too.
+var (
+	csColorPrimary = lipgloss.Color("69")  // blue
+	csColorAccent  = lipgloss.Color("212") // pink
+	csColorOK      = lipgloss.Color("42")  // green
+	csColorErr     = lipgloss.Color("196") // red
+	csColorMuted   = lipgloss.Color("244") // grey
+	csColorPath    = lipgloss.Color("117") // cyan-ish for file paths
+	csColorCmd     = lipgloss.Color("180") // amber-ish for shell commands
+
+	csArrowOut    = lipgloss.NewStyle().Foreground(csColorPrimary).Bold(true).Render("→")
+	csArrowIn     = lipgloss.NewStyle().Foreground(csColorPrimary).Bold(true).Render("←")
+	csBullet      = lipgloss.NewStyle().Foreground(csColorAccent).Bold(true).Render("●")
+	csCheck       = lipgloss.NewStyle().Foreground(csColorOK).Bold(true).Render("✓")
+	csCross       = lipgloss.NewStyle().Foreground(csColorErr).Bold(true).Render("✗")
+	csStyleTool   = lipgloss.NewStyle().Foreground(csColorAccent).Bold(true)
+	csStyleMuted  = lipgloss.NewStyle().Foreground(csColorMuted)
+	csStylePath   = lipgloss.NewStyle().Foreground(csColorPath).Underline(true)
+	csStyleCmd    = lipgloss.NewStyle().Foreground(csColorCmd)
+	csStyleResult = lipgloss.NewStyle().Foreground(csColorMuted).Italic(true)
+	csStyleText   = lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
+	csStyleThink  = lipgloss.NewStyle().Foreground(csColorMuted).Italic(true)
+	csStyleDone   = lipgloss.NewStyle().Foreground(csColorOK).Bold(true)
 )
 
 // ClaudeStream parses claude's `--output-format stream-json` output. It
@@ -42,9 +71,9 @@ func (c *ClaudeStream) Push(line string) (string, bool) {
 			if len(sid) > 8 {
 				sid = sid[:8]
 			}
-			parts := []string{"● session " + sid}
+			parts := []string{csBullet + " session " + csStyleTool.Render(sid)}
 			if model != "" {
-				parts = append(parts, "model="+model)
+				parts = append(parts, csStyleMuted.Render("model="+model))
 			}
 			return strings.Join(parts, " · "), true
 		}
@@ -59,7 +88,8 @@ func (c *ClaudeStream) Push(line string) (string, bool) {
 		dur, _ := ev["duration_ms"].(float64)
 		turns, _ := ev["num_turns"].(float64)
 		cost, _ := ev["total_cost_usd"].(float64)
-		return fmt.Sprintf("● done in %.1fs · %.0f turns · $%.4f", dur/1000, turns, cost), true
+		summary := fmt.Sprintf("done in %.1fs · %.0f turns · $%.4f", dur/1000, turns, cost)
+		return csBullet + " " + csStyleDone.Render(summary), true
 	}
 	return "", false
 }
@@ -85,7 +115,7 @@ func (c *ClaudeStream) formatAssistant(ev map[string]any) (string, bool) {
 		switch bt, _ := b["type"].(string); bt {
 		case "text":
 			if text, _ := b["text"].(string); text != "" {
-				out = append(out, text)
+				out = append(out, csStyleText.Render(text))
 			}
 		case "tool_use":
 			name, _ := b["name"].(string)
@@ -94,10 +124,10 @@ func (c *ClaudeStream) formatAssistant(ev map[string]any) (string, bool) {
 				c.toolNames[id] = name
 			}
 			input, _ := b["input"].(map[string]any)
-			out = append(out, "→ "+name+summariseInput(name, input))
+			out = append(out, csArrowOut+" "+csStyleTool.Render(name)+summariseInput(name, input))
 		case "thinking":
 			if text, _ := b["thinking"].(string); text != "" {
-				out = append(out, "  (thinking) "+truncateInline(text, 200))
+				out = append(out, csStyleThink.Render("  (thinking) "+truncateInline(text, 200)))
 			}
 		}
 	}
@@ -128,12 +158,12 @@ func (c *ClaudeStream) formatUser(ev map[string]any) (string, bool) {
 			name = "tool"
 		}
 		isErr, _ := b["is_error"].(bool)
-		marker := "✓"
+		marker := csCheck
 		if isErr {
-			marker = "✗"
+			marker = csCross
 		}
 		body := truncateInline(contentToString(b["content"]), 120)
-		out = append(out, fmt.Sprintf("← %s %s: %s", marker, name, body))
+		out = append(out, csArrowIn+" "+marker+" "+csStyleTool.Render(name)+csStyleMuted.Render(": ")+csStyleResult.Render(body))
 	}
 	if len(out) == 0 {
 		return "", false
@@ -153,26 +183,27 @@ func summariseInput(toolName string, input map[string]any) string {
 		}
 		return ""
 	}
+	sep := csStyleMuted.Render(": ")
 	switch toolName {
 	case "Bash":
 		if v := pick("command"); v != "" {
-			return ": " + truncateInline(v, 100)
+			return sep + csStyleCmd.Render(truncateInline(v, 100))
 		}
 	case "Read", "Write", "Edit", "NotebookEdit":
 		if v := pick("file_path", "notebook_path"); v != "" {
-			return ": " + v
+			return sep + csStylePath.Render(v)
 		}
 	case "Glob":
 		if v := pick("pattern"); v != "" {
-			return ": " + v
+			return sep + csStylePath.Render(v)
 		}
 	case "Grep":
 		if v := pick("pattern"); v != "" {
-			return ": " + truncateInline(v, 80)
+			return sep + csStyleCmd.Render(truncateInline(v, 80))
 		}
 	case "WebFetch":
 		if v := pick("url"); v != "" {
-			return ": " + v
+			return sep + csStylePath.Render(v)
 		}
 	}
 	return ""

@@ -191,17 +191,14 @@ func (m *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 	}
 
-	// Forward unhandled key/mouse events to the viewport for scroll bindings.
-	atBottom := !m.viewportInit || m.viewport.AtBottom()
+	// Forward key/mouse events to the viewport for scroll bindings.
+	// Auto-tail is handled inside refreshViewport, which captures the
+	// pre-update follow state before mutating content.
 	if m.viewportInit {
 		var vpCmd tea.Cmd
 		m.viewport, vpCmd = m.viewport.Update(msg)
 		if vpCmd != nil {
 			cmds = append(cmds, vpCmd)
-		}
-		// If the user wasn't manually scrolled, keep pinned to bottom.
-		if atBottom {
-			m.viewport.GotoBottom()
 		}
 	}
 
@@ -296,7 +293,14 @@ func (m *AppModel) refreshViewport() {
 	if !m.viewportInit {
 		return
 	}
+	// Capture follow-state before SetContent: if the user was already
+	// pinned to the bottom, we want to stay pinned after appending. If
+	// they manually scrolled up, leave their position alone.
+	wasAtBottom := m.viewport.AtBottom()
 	m.viewport.SetContent(strings.Join(m.lines, "\n"))
+	if wasAtBottom {
+		m.viewport.GotoBottom()
+	}
 }
 
 func (m *AppModel) View() string {
