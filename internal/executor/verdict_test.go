@@ -10,19 +10,20 @@ func TestParseGateVerdict(t *testing.T) {
 	}{
 		{"done alone", "DONE", VerdictDone},
 		{"done with reason", "DONE — all tests pass", VerdictDone},
-		{"pass keyword", "the review PASS", VerdictDone},
-		{"complete keyword", "Looks COMPLETE to me", VerdictDone},
-		{"approve keyword", "I APPROVE this change", VerdictDone},
-		{"accept keyword", "ACCEPT the work", VerdictDone},
-		{"mixed case done", "done", VerdictDone},
+		{"done with colon", "DONE: ready to merge", VerdictDone},
+		{"done lowercase", "done", VerdictDone},
+		{"markdown heading done", "## DONE", VerdictDone},
+		{"bold done", "**DONE**", VerdictDone},
+		{"quote done", "> DONE", VerdictDone},
 		{"iterate alone", "ITERATE", VerdictIterate},
-		{"revise keyword", "please REVISE the code", VerdictIterate},
-		{"retry keyword", "RETRY with fixes", VerdictIterate},
-		{"done wins over iterate when on earlier line", "DONE\nITERATE", VerdictDone},
-		{"iterate wins when on earlier line", "some commentary\nITERATE here\nDONE later", VerdictIterate},
+		{"iterate with reason", "ITERATE: more tests needed", VerdictIterate},
+		{"last-match wins: done then iterate", "DONE\nITERATE", VerdictIterate},
+		{"last-match wins: iterate then done", "some commentary\nITERATE here\nDONE", VerdictDone},
+		{"reasoning followed by verdict", "The tests pass and code looks good.\n\nDONE", VerdictDone},
+		{"substring in prose does NOT match", "I've completed a thorough review of the code", VerdictIterate},
+		{"'complete' mid-sentence does NOT match", "all tasks are complete and tests pass", VerdictIterate},
 		{"empty defaults to iterate", "", VerdictIterate},
 		{"no keywords defaults to iterate", "just some commentary", VerdictIterate},
-		{"done embedded in word DOES NOT match (substring match used — so 'DONENESS' counts)", "the DONENESS of it", VerdictDone},
 	}
 
 	for _, tc := range cases {
@@ -41,11 +42,17 @@ func TestParseRalphVerdict(t *testing.T) {
 		output string
 		want   RalphVerdict
 	}{
-		{"next", "NEXT task", RalphVerdictNext},
-		{"continue", "CONTINUE with the next item", RalphVerdictNext},
-		{"done", "DONE — no more tasks", RalphVerdictDone},
-		{"complete", "all tasks COMPLETE", RalphVerdictDone},
-		{"finished", "FINISHED the list", RalphVerdictDone},
+		{"next alone", "NEXT", RalphVerdictNext},
+		{"next with reason", "NEXT — more tasks remain", RalphVerdictNext},
+		{"continue", "CONTINUE", RalphVerdictNext},
+		{"done alone", "DONE", RalphVerdictDone},
+		{"markdown heading next", "## NEXT", RalphVerdictNext},
+		{"reasoning then verdict", "Reviewed all changes.\n\nDONE", RalphVerdictDone},
+		{"last-match wins: next then done", "NEXT\nDONE", RalphVerdictDone},
+		{"last-match wins: done then next", "## DONE\nNEXT", RalphVerdictNext},
+		{"'completed' in prose does NOT match", "I've completed a thorough review of all changes", RalphVerdictDone},
+		{"'complete' mid-sentence does NOT match", "all tasks are complete", RalphVerdictDone},
+		{"'continued' substring does NOT match", "work continued as planned", RalphVerdictDone},
 		{"empty defaults to done", "", RalphVerdictDone},
 		{"ambiguous defaults to done", "some commentary", RalphVerdictDone},
 	}

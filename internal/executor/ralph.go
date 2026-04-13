@@ -13,6 +13,20 @@ import (
 	"github.com/ihavespoons/braid/internal/tui"
 )
 
+// ralphVerdictInstruction is appended to every ralph gate prompt so the
+// agent knows what keyword to emit. Without this, a user-supplied
+// "criteria"-style prompt ("done when all tasks complete") leaves claude
+// free-form and the verdict parser can't reliably pick DONE vs NEXT.
+const ralphVerdictInstruction = `
+
+---
+
+Respond with exactly one of these keywords on its own line at the end of your response:
+- NEXT — more tasks remain to work on.
+- DONE — all tasks are complete.
+
+Do not include explanations on the verdict line itself; put reasoning above it.`
+
 // executeRalph is the outer task-progression loop. Each iteration runs the
 // inner node (typically a review loop) then asks a gate agent whether more
 // tasks remain. DONE stops ralph; NEXT continues. If the inner loop exhausts
@@ -67,7 +81,7 @@ func executeRalph(ctx context.Context, node *ast.RalphNode, ec *ExecutionContext
 
 		prompt, err := template.Render(ec.BraidMD, template.LoopContext{
 			Step:            string(config.StepRalph),
-			Prompt:          node.GatePrompt,
+			Prompt:          node.GatePrompt + ralphVerdictInstruction,
 			LastMessage:     result.LastMessage,
 			Iteration:       task,
 			MaxIterations:   node.MaxTasks,
