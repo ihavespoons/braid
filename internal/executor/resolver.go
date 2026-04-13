@@ -304,7 +304,13 @@ func runJudgeAgent(ctx context.Context, ec *ExecutionContext, prompt string) (st
 			ec.emit(tui.RetryEvent{Attempt: info.Attempt})
 		},
 	}, func() (string, error) {
-		return runnerForMode.RunAgent(ctx, gateStep.Agent, gateStep.Model, prompt, onLine)
+		return runnerForMode.RunAgent(ctx, runner.Invocation{
+			Agent:          gateStep.Agent,
+			Model:          gateStep.Model,
+			PermissionMode: gateStep.Permissions,
+			Prompt:         prompt,
+			OnLine:         onLine,
+		})
 	})
 }
 

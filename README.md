@@ -98,13 +98,14 @@ progression).
   "sandbox": "agent",
   "animation": "strip",
   "agent": "claude",
+  "permissions": "acceptEdits",
   "env": ["CLAUDE_CODE_OAUTH_TOKEN"],
   "steps": {
     "work":    {},
     "review":  {},
     "gate":    {},
     "iterate": {},
-    "ralph":   {}
+    "ralph":   {"permissions": "bypassPermissions"}
   },
   "retry": {
     "enabled": true,
@@ -114,8 +115,16 @@ progression).
 }
 ```
 
-Each `steps.*` entry may override `agent`, `model`, and `sandbox` for
-that step. `iterate` falls back to `work` and `ralph` falls back to `gate`.
+Each `steps.*` entry may override `agent`, `model`, `sandbox`, and
+`permissions` for that step. `iterate` falls back to `work` and `ralph`
+falls back to `gate`.
+
+`permissions` controls claude's `--permission-mode`. Valid values:
+`default`, `acceptEdits`, `auto`, `bypassPermissions`, `dontAsk`, `plan`.
+When omitted, native runs default to `acceptEdits` (auto-accept edits,
+prompt for everything else) and docker runs default to
+`bypassPermissions` (the container is already isolated, and headless
+`-p` calls hang on interactive prompts).
 
 ### `.braid/docker.json`
 

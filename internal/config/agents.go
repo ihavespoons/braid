@@ -69,14 +69,27 @@ func IsValidAnimation(v string) bool {
 
 // StepAgentConfig is a per-step override.
 type StepAgentConfig struct {
-	Agent   AgentName   `json:"agent,omitempty"`
-	Model   string      `json:"model,omitempty"`
-	Sandbox SandboxMode `json:"sandbox,omitempty"`
+	Agent       AgentName   `json:"agent,omitempty"`
+	Model       string      `json:"model,omitempty"`
+	Sandbox     SandboxMode `json:"sandbox,omitempty"`
+	Permissions string      `json:"permissions,omitempty"`
 }
 
 // StepSelection is the fully-resolved configuration for a single step invocation.
 type StepSelection struct {
-	Agent   AgentName
-	Model   string
-	Sandbox SandboxMode
+	Agent       AgentName
+	Model       string
+	Sandbox     SandboxMode
+	Permissions string // claude --permission-mode value; empty = runner default
+}
+
+// IsValidPermissionMode reports whether v is a recognized claude
+// --permission-mode value. Empty string is also accepted (means "use the
+// runner's default").
+func IsValidPermissionMode(v string) bool {
+	switch v {
+	case "", "default", "acceptEdits", "auto", "bypassPermissions", "dontAsk", "plan":
+		return true
+	}
+	return false
 }

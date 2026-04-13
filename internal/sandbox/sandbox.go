@@ -43,8 +43,8 @@ func NewDockerRunner(projectRoot string, envPassthrough []string, dc config.Dock
 var _ runner.AgentRunner = (*DockerRunner)(nil)
 
 // RunAgent invokes the given agent inside a sandboxed container, streaming
-// stdout lines via onLine.
-func (r *DockerRunner) RunAgent(ctx context.Context, agent config.AgentName, model, prompt string, onLine func(string)) (string, error) {
+// stdout lines via inv.OnLine.
+func (r *DockerRunner) RunAgent(ctx context.Context, inv runner.Invocation) (string, error) {
 	r.mu.Lock()
 	if r.aborted {
 		r.mu.Unlock()
@@ -52,11 +52,15 @@ func (r *DockerRunner) RunAgent(ctx context.Context, agent config.AgentName, mod
 	}
 	r.mu.Unlock()
 
+	agent := inv.Agent
+	prompt := inv.Prompt
+	onLine := inv.OnLine
+
 	if err := EnsureImage(ctx, r.projectRoot, r.docker); err != nil {
 		return "", err
 	}
 
-	cmdName, cmdArgs, err := buildAgentCommand(agent, model)
+	cmdName, cmdArgs, err := buildAgentCommand(agent, inv.Model, inv.PermissionMode)
 	if err != nil {
 		return "", err
 	}
@@ -193,12 +197,19 @@ func (r *DockerRunner) Stop() error {
 }
 
 // buildAgentCommand returns the binary + argv for the given agent. The
-// sandbox currently only supports Claude Code.
-func buildAgentCommand(agent config.AgentName, model string) (string, []string, error) {
+// sandbox currently only supports Claude Code. permissionMode defaults to
+// "bypassPermissions" because the docker sandbox already constrains
+// network and filesystem access — interactive permission prompts would
+// just hang the headless -p invocation.
+func buildAgentCommand(agent config.AgentName, model, permissionMode string) (string, []string, error) {
 	switch agent {
 	case config.AgentClaude:
+		mode := permissionMode
+		if mode == "" {
+			mode = "bypassPermissions"
+		}
 		args := []string{
-			"--permission-mode", "acceptEdits",
+			"--permission-mode", mode,
 			"-p",
 			"--output-format", "stream-json",
 			"--verbose",

@@ -44,7 +44,12 @@ func runScript(t *testing.T, scriptBody string, prompt string) (string, []string
 		lines = append(lines, s)
 	}
 
-	out, err := r.RunAgent(context.Background(), "claude", "test-model", prompt, onLine)
+	out, err := r.RunAgent(context.Background(), Invocation{
+		Agent:  "claude",
+		Model:  "test-model",
+		Prompt: prompt,
+		OnLine: onLine,
+	})
 	return out, lines, err
 }
 
@@ -110,7 +115,7 @@ func TestNativeRunner_ContextCancellation(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		_, _ = r.RunAgent(ctx, "claude", "", "", nil)
+		_, _ = r.RunAgent(ctx, Invocation{Agent: "claude"})
 		close(done)
 	}()
 
@@ -138,7 +143,7 @@ func TestNativeRunner_StopTerminates(t *testing.T) {
 	r := NewNative(scratch, nil)
 	done := make(chan struct{})
 	go func() {
-		_, _ = r.RunAgent(context.Background(), "claude", "", "", nil)
+		_, _ = r.RunAgent(context.Background(), Invocation{Agent: "claude"})
 		close(done)
 	}()
 
@@ -202,7 +207,7 @@ func TestPool_StopAllPreventsReuse(t *testing.T) {
 // noopRunner satisfies AgentRunner for pool tests.
 type noopRunner struct{}
 
-func (*noopRunner) RunAgent(context.Context, config.AgentName, string, string, func(string)) (string, error) {
+func (*noopRunner) RunAgent(context.Context, Invocation) (string, error) {
 	return "", nil
 }
 func (*noopRunner) Stop() error { return nil }

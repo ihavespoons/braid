@@ -37,9 +37,9 @@ func NewNative(projectRoot string, envPassthrough []string) *NativeRunner {
 	}
 }
 
-// RunAgent invokes the agent subprocess, streaming stdout lines via onLine.
-// Returns the complete stdout on success. Honors ctx cancellation.
-func (r *NativeRunner) RunAgent(ctx context.Context, agent config.AgentName, model, prompt string, onLine func(string)) (string, error) {
+// RunAgent invokes the agent subprocess, streaming stdout lines via
+// inv.OnLine. Returns the agent's reply on success. Honors ctx cancellation.
+func (r *NativeRunner) RunAgent(ctx context.Context, inv Invocation) (string, error) {
 	r.mu.Lock()
 	if r.aborted {
 		r.mu.Unlock()
@@ -47,7 +47,11 @@ func (r *NativeRunner) RunAgent(ctx context.Context, agent config.AgentName, mod
 	}
 	r.mu.Unlock()
 
-	cmdName, args, err := buildCommand(agent, model)
+	agent := inv.Agent
+	prompt := inv.Prompt
+	onLine := inv.OnLine
+
+	cmdName, args, err := buildCommand(agent, inv.Model, inv.PermissionMode)
 	if err != nil {
 		return "", err
 	}
@@ -194,15 +198,20 @@ func (r *NativeRunner) Stop() error {
 }
 
 // buildCommand returns the executable and argv for the given agent.
-// Phase 2 supports claude only.
-func buildCommand(agent config.AgentName, model string) (string, []string, error) {
+// permissionMode is passed to claude as --permission-mode; an empty
+// string falls back to "acceptEdits" for backward compatibility.
+func buildCommand(agent config.AgentName, model, permissionMode string) (string, []string, error) {
 	switch agent {
 	case config.AgentClaude:
+		mode := permissionMode
+		if mode == "" {
+			mode = "acceptEdits"
+		}
 		// stream-json + verbose lets us surface tool calls, results, and
 		// intermediate assistant text to the TUI as the agent works,
 		// instead of waiting until the whole call completes.
 		args := []string{
-			"--permission-mode", "acceptEdits",
+			"--permission-mode", mode,
 			"-p",
 			"--output-format", "stream-json",
 			"--verbose",

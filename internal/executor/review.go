@@ -164,7 +164,13 @@ func runAgentLoop(ctx context.Context, cfg agentLoopConfig, ec *ExecutionContext
 					ec.emit(tui.RetryEvent{Attempt: info.Attempt})
 				},
 			}, func() (string, error) {
-				return runnerForMode.RunAgent(ctx, stepSel.Agent, stepSel.Model, prompt, onLine)
+				return runnerForMode.RunAgent(ctx, runner.Invocation{
+					Agent:          stepSel.Agent,
+					Model:          stepSel.Model,
+					PermissionMode: stepSel.Permissions,
+					Prompt:         prompt,
+					OnLine:         onLine,
+				})
 			})
 			if err != nil {
 				return &ExecutionResult{

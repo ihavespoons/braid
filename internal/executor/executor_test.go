@@ -38,12 +38,12 @@ func (m *mockRunner) queue(step, response string) {
 	m.responses[step] = append(m.responses[step], response)
 }
 
-func (m *mockRunner) RunAgent(_ context.Context, agent config.AgentName, model, prompt string, onLine func(string)) (string, error) {
+func (m *mockRunner) RunAgent(_ context.Context, inv runner.Invocation) (string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.calls = append(m.calls, mockCall{Agent: agent, Model: model, Prompt: prompt})
+	m.calls = append(m.calls, mockCall{Agent: inv.Agent, Model: inv.Model, Prompt: inv.Prompt})
 
-	step := extractStep(prompt)
+	step := extractStep(inv.Prompt)
 	if step == "" {
 		step = "unknown"
 	}
@@ -54,8 +54,8 @@ func (m *mockRunner) RunAgent(_ context.Context, agent config.AgentName, model, 
 	}
 	response := queue[0]
 	m.responses[step] = queue[1:]
-	if onLine != nil {
-		onLine(response)
+	if inv.OnLine != nil {
+		inv.OnLine(response)
 	}
 	return response, nil
 }

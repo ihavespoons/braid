@@ -76,7 +76,10 @@ func ResolveStepConfig(cfg *config.BraidConfig, flags *ast.ParsedFlags) map[conf
 		agent := firstAgent(config.AgentName(stepFlagAgent), stepCfg.Agent, defaults.agent)
 		model := firstString(stepFlagModel, stepCfg.Model, defaults.model)
 		sandbox := firstSandbox(stepCfg.Sandbox, defaults.sandbox)
-		return config.StepSelection{Agent: agent, Model: model, Sandbox: sandbox}
+		// Permission precedence: per-step config > global config > sandbox-aware
+		// default (applied later by the runner if still empty).
+		permissions := firstString(stepCfg.Permissions, cfg.Permissions)
+		return config.StepSelection{Agent: agent, Model: model, Sandbox: sandbox, Permissions: permissions}
 	}
 
 	work := resolveStep(config.StepWork, flags.WorkAgent, flags.WorkModel)

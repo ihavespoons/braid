@@ -28,13 +28,14 @@ func DefaultRetryConfig() RetryConfig {
 
 // BraidConfig is the top-level user configuration loaded from .braid/config.json.
 type BraidConfig struct {
-	Sandbox   SandboxMode
-	Env       []string
-	Animation AnimationStyle
-	Agent     AgentName
-	Model     string
-	Steps     map[StepName]StepAgentConfig
-	Retry     RetryConfig
+	Sandbox     SandboxMode
+	Env         []string
+	Animation   AnimationStyle
+	Agent       AgentName
+	Model       string
+	Permissions string // global default for claude --permission-mode
+	Steps       map[StepName]StepAgentConfig
+	Retry       RetryConfig
 }
 
 // Default returns a BraidConfig populated with built-in defaults.
@@ -57,19 +58,21 @@ func Default() BraidConfig {
 
 // rawConfig mirrors the JSON shape on disk so we can validate each field.
 type rawConfig struct {
-	Sandbox   string                         `json:"sandbox"`
-	Env       []string                       `json:"env"`
-	Animation string                         `json:"animation"`
-	Agent     string                         `json:"agent"`
-	Model     string                         `json:"model"`
-	Steps     map[string]rawStepAgentConfig  `json:"steps"`
-	Retry     *rawRetryConfig                `json:"retry"`
+	Sandbox     string                        `json:"sandbox"`
+	Env         []string                      `json:"env"`
+	Animation   string                        `json:"animation"`
+	Agent       string                        `json:"agent"`
+	Model       string                        `json:"model"`
+	Permissions string                        `json:"permissions"`
+	Steps       map[string]rawStepAgentConfig `json:"steps"`
+	Retry       *rawRetryConfig               `json:"retry"`
 }
 
 type rawStepAgentConfig struct {
-	Agent   string `json:"agent"`
-	Model   string `json:"model"`
-	Sandbox string `json:"sandbox"`
+	Agent       string `json:"agent"`
+	Model       string `json:"model"`
+	Sandbox     string `json:"sandbox"`
+	Permissions string `json:"permissions"`
 }
 
 type rawRetryConfig struct {
@@ -120,6 +123,9 @@ func Load(projectRoot string) (BraidConfig, error) {
 	}
 	if raw.Model != "" {
 		cfg.Model = raw.Model
+	}
+	if IsValidPermissionMode(raw.Permissions) && raw.Permissions != "" {
+		cfg.Permissions = raw.Permissions
 	}
 
 	// Merge env (user adds to defaults; dedupe preserving order).
@@ -174,6 +180,9 @@ func parseStepAgentConfig(raw rawStepAgentConfig) StepAgentConfig {
 	}
 	if IsValidSandbox(raw.Sandbox) {
 		out.Sandbox = SandboxMode(raw.Sandbox)
+	}
+	if IsValidPermissionMode(raw.Permissions) && raw.Permissions != "" {
+		out.Permissions = raw.Permissions
 	}
 	return out
 }

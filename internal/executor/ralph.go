@@ -100,7 +100,13 @@ func executeRalph(ctx context.Context, node *ast.RalphNode, ec *ExecutionContext
 				ec.emit(tui.RetryEvent{Attempt: info.Attempt})
 			},
 		}, func() (string, error) {
-			return runnerForMode.RunAgent(ctx, ralphStep.Agent, ralphStep.Model, prompt, onLine)
+			return runnerForMode.RunAgent(ctx, runner.Invocation{
+				Agent:          ralphStep.Agent,
+				Model:          ralphStep.Model,
+				PermissionMode: ralphStep.Permissions,
+				Prompt:         prompt,
+				OnLine:         onLine,
+			})
 		})
 		if err != nil {
 			return nil, fmt.Errorf("ralph gate failed on task %d: %w", task, err)
