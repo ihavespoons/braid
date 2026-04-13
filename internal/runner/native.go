@@ -63,6 +63,14 @@ func (r *NativeRunner) RunAgent(ctx context.Context, agent config.AgentName, mod
 	cmd.Dir = r.projectRoot
 	cmd.Env = buildEnv(r.env)
 
+	// claude streams its activity as JSONL when --output-format=stream-json
+	// is set; the parser turns those events into readable display lines and
+	// captures the final assistant text for the return value.
+	var stream *ClaudeStream
+	if agent == config.AgentClaude {
+		stream = NewClaudeStream()
+	}
+
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return "", fmt.Errorf("stdin pipe: %w", err)
@@ -102,15 +110,24 @@ func (r *NativeRunner) RunAgent(ctx context.Context, agent config.AgentName, mod
 	var fullOutput bytes.Buffer
 	lb := &LineBuffer{}
 	chunk := make([]byte, 4096)
+	emit := func(line string) {
+		if stream != nil {
+			if display, show := stream.Push(line); show && onLine != nil {
+				onLine(display)
+			}
+			return
+		}
+		if onLine != nil {
+			onLine(line)
+		}
+	}
 	for {
 		n, readErr := stdout.Read(chunk)
 		if n > 0 {
 			text := string(chunk[:n])
 			fullOutput.WriteString(text)
 			for _, line := range lb.Push(text) {
-				if onLine != nil {
-					onLine(line)
-				}
+				emit(line)
 			}
 		}
 		if readErr != nil {
@@ -118,9 +135,7 @@ func (r *NativeRunner) RunAgent(ctx context.Context, agent config.AgentName, mod
 		}
 	}
 	for _, line := range lb.Flush() {
-		if onLine != nil {
-			onLine(line)
-		}
+		emit(line)
 	}
 
 	<-stderrDone
@@ -130,10 +145,19 @@ func (r *NativeRunner) RunAgent(ctx context.Context, agent config.AgentName, mod
 	r.current = nil
 	r.mu.Unlock()
 
-	if waitErr != nil {
-		return fullOutput.String(), fmt.Errorf("%s failed: %w: %s", agent, waitErr, strings.TrimSpace(stderrBuf.String()))
+	// When stream-json was used, return the parsed `result` text so the
+	// executor's gate parser sees the assistant's reply rather than raw
+	// JSONL. Fall back to raw stdout if no result event arrived (e.g.
+	// non-claude agents, or claude failed before emitting one).
+	output := fullOutput.String()
+	if stream != nil && stream.Result() != "" {
+		output = stream.Result()
 	}
-	return fullOutput.String(), nil
+
+	if waitErr != nil {
+		return output, fmt.Errorf("%s failed: %w: %s", agent, waitErr, strings.TrimSpace(stderrBuf.String()))
+	}
+	return output, nil
 }
 
 // Stop terminates any running child with SIGTERM; if it hasn't exited after
@@ -174,7 +198,15 @@ func (r *NativeRunner) Stop() error {
 func buildCommand(agent config.AgentName, model string) (string, []string, error) {
 	switch agent {
 	case config.AgentClaude:
-		args := []string{"--permission-mode", "acceptEdits", "-p"}
+		// stream-json + verbose lets us surface tool calls, results, and
+		// intermediate assistant text to the TUI as the agent works,
+		// instead of waiting until the whole call completes.
+		args := []string{
+			"--permission-mode", "acceptEdits",
+			"-p",
+			"--output-format", "stream-json",
+			"--verbose",
+		}
 		if model != "" {
 			args = append([]string{"--model", model}, args...)
 		}
