@@ -192,7 +192,7 @@ func (m *RaceModel) refreshRun(r *raceRun) {
 		return
 	}
 	atBottom := r.viewport.AtBottom()
-	r.viewport.SetContent(strings.Join(r.lines, "\n"))
+	r.viewport.SetContent(wrapLines(r.lines, r.viewport.Width))
 	if atBottom {
 		r.viewport.GotoBottom()
 	}

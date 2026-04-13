@@ -8,6 +8,7 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // tickMsg drives the spinner animation.
@@ -293,10 +294,27 @@ func (m *AppModel) refreshViewport() {
 	// pinned to the bottom, we want to stay pinned after appending. If
 	// they manually scrolled up, leave their position alone.
 	wasAtBottom := m.viewport.AtBottom()
-	m.viewport.SetContent(strings.Join(m.lines, "\n"))
+	m.viewport.SetContent(wrapLines(m.lines, m.viewport.Width))
 	if wasAtBottom {
 		m.viewport.GotoBottom()
 	}
+}
+
+// wrapLines hard-wraps each line to width visible columns, preserving any
+// embedded ANSI styling. Without this, long file paths and tool output
+// overflow the viewport's column and visually bleed into the sidebar.
+func wrapLines(lines []string, width int) string {
+	if width < 1 {
+		width = 1
+	}
+	var sb strings.Builder
+	for i, line := range lines {
+		if i > 0 {
+			sb.WriteByte('\n')
+		}
+		sb.WriteString(ansi.Hardwrap(line, width, true))
+	}
+	return sb.String()
 }
 
 func (m *AppModel) View() string {
