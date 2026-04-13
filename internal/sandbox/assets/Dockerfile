@@ -24,7 +24,11 @@ RUN apt-get update \
 
 RUN npm install -g @anthropic-ai/claude-code
 
-RUN useradd -m -u 1000 -s /bin/bash braid
+# node:20-slim ships a `node` user at UID/GID 1000; remove it so we can
+# claim 1000 for `braid` (the entrypoint later remaps to the host UID).
+RUN userdel -r node 2>/dev/null || true \
+ && groupdel node 2>/dev/null || true \
+ && useradd -m -u 1000 -s /bin/bash braid
 
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
