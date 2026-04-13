@@ -21,6 +21,11 @@ func tick() tea.Cmd {
 // from this slice; older lines drop off the front when the cap is hit.
 const maxScrollback = 5000
 
+// promptPanelRows is the fixed height (in terminal rows) reserved for the
+// prompt panel when it is visible. Using a fixed height keeps the sidebar
+// and main viewport aligned regardless of how the prompt wraps.
+const promptPanelRows = 10
+
 type stepState int
 
 const (
@@ -269,16 +274,7 @@ func (m *AppModel) resizeViewport() {
 	if mainW < 10 {
 		mainW = 10
 	}
-	bannerH := 2  // banner + bottom border
-	statusH := 1  // single status line
-	promptH := 0
-	if m.showPrompt && m.prompt != "" {
-		promptH = promptPanelHeight(m.prompt)
-	}
-	contentH := m.height - bannerH - statusH - promptH
-	if contentH < 3 {
-		contentH = 3
-	}
+	contentH := m.contentHeight()
 	if !m.viewportInit {
 		m.viewport = viewport.New(mainW, contentH)
 		m.viewport.MouseWheelEnabled = true
@@ -319,7 +315,13 @@ func (m *AppModel) View() string {
 	main := m.renderMain()
 	body := lipgloss.JoinHorizontal(lipgloss.Top, sidebar, main)
 	status := m.renderStatusBar()
-	return lipgloss.JoinVertical(lipgloss.Left, banner, body, status)
+
+	parts := []string{banner}
+	if m.showPrompt && m.prompt != "" {
+		parts = append(parts, m.renderPromptPanel(m.width))
+	}
+	parts = append(parts, body, status)
+	return lipgloss.JoinVertical(lipgloss.Left, parts...)
 }
 
 func (m *AppModel) renderBanner() string {
@@ -414,32 +416,37 @@ func (m *AppModel) renderMain() string {
 		mw = 10
 	}
 	contentH := m.contentHeight()
-
-	parts := []string{}
-	if m.showPrompt && m.prompt != "" {
-		parts = append(parts, m.renderPromptPanel(mw))
-	}
-	parts = append(parts, m.viewport.View())
-
-	body := lipgloss.JoinVertical(lipgloss.Left, parts...)
-	return styleMain.Width(mw).Height(contentH).Render(body)
+	return styleMain.Width(mw).Height(contentH).Render(m.viewport.View())
 }
 
+// renderPromptPanel returns a panel of exactly promptPanelRows rows so the
+// sidebar and main viewport can size themselves predictably regardless of
+// how the prompt wraps.
 func (m *AppModel) renderPromptPanel(width int) string {
-	const maxLines = 6
+	const visibleLines = 6
 	lines := strings.Split(m.prompt, "\n")
 	shown := lines
 	more := 0
-	if len(lines) > maxLines {
-		shown = lines[:maxLines]
-		more = len(lines) - maxLines
+	if len(shown) > visibleLines {
+		shown = lines[:visibleLines]
+		more = len(lines) - visibleLines
 	}
 	body := strings.Join(shown, "\n")
 	if more > 0 {
 		body += fmt.Sprintf("\n… (%d more lines)", more)
 	}
 	header := styleStepMeta.Render("prompt (toggle with 'p')")
-	return stylePromptPanel.Width(width - 2).Render(header + "\n" + body)
+	panel := stylePromptPanel.Width(width - 2).Render(header + "\n" + body)
+	return clampToRows(panel, promptPanelRows)
+}
+
+// clampToRows truncates or pads s to exactly n visible rows.
+func clampToRows(s string, n int) string {
+	rows := strings.Split(s, "\n")
+	if len(rows) >= n {
+		return strings.Join(rows[:n], "\n")
+	}
+	return s + strings.Repeat("\n", n-len(rows))
 }
 
 func (m *AppModel) renderStatusBar() string {
@@ -482,7 +489,11 @@ func (m *AppModel) renderStatusBar() string {
 func (m *AppModel) contentHeight() int {
 	bannerH := 2
 	statusH := 1
-	h := m.height - bannerH - statusH
+	promptH := 0
+	if m.showPrompt && m.prompt != "" {
+		promptH = promptPanelRows
+	}
+	h := m.height - bannerH - statusH - promptH
 	if h < 3 {
 		h = 3
 	}
@@ -539,11 +550,3 @@ func sidebarWidth(total int) int {
 	return w
 }
 
-func promptPanelHeight(prompt string) int {
-	const maxLines = 6
-	n := strings.Count(prompt, "\n") + 1
-	if n > maxLines {
-		n = maxLines + 1 // +1 for "… (N more)"
-	}
-	return n + 3 // header + 2 borders
-}
