@@ -20,6 +20,12 @@ const (
 // DockerConfig is loaded from .braid/docker.json.
 type DockerConfig struct {
 	Network DockerNetwork `json:"network"`
+	// Dockerfile, if set, is a path (relative to projectRoot, or absolute)
+	// to a user-supplied Dockerfile that replaces the embedded one when
+	// building the sandbox image. The custom Dockerfile is still built
+	// against a context containing the embedded entrypoint.sh, so it must
+	// COPY it into place and preserve the braid user contract.
+	Dockerfile string `json:"dockerfile,omitempty"`
 }
 
 // DockerNetwork holds the network-level policy.
@@ -43,6 +49,7 @@ type rawDockerConfig struct {
 		Mode         string   `json:"mode"`
 		AllowedHosts []string `json:"allowedHosts"`
 	} `json:"network"`
+	Dockerfile string `json:"dockerfile"`
 }
 
 // LoadDocker reads .braid/docker.json from projectRoot.
@@ -65,6 +72,9 @@ func LoadDocker(projectRoot string) (DockerConfig, error) {
 
 	if raw.Network.Mode == string(DockerNetworkUnrestricted) {
 		cfg.Network.Mode = DockerNetworkUnrestricted
+	}
+	if raw.Dockerfile != "" {
+		cfg.Dockerfile = raw.Dockerfile
 	}
 	if raw.Network.AllowedHosts != nil {
 		hosts := make([]string, 0, len(raw.Network.AllowedHosts))

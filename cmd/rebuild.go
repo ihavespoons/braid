@@ -8,6 +8,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/ihavespoons/braid/internal/config"
 	braidlog "github.com/ihavespoons/braid/internal/log"
 	"github.com/ihavespoons/braid/internal/sandbox"
 )
@@ -37,7 +38,16 @@ func runRebuild(cmd *cobra.Command, args []string) error {
 		braidlog.OK("removed existing image (if any)")
 	}
 
-	if err := sandbox.BuildImage(ctx); err != nil {
+	projectRoot, err := os.Getwd()
+	if err != nil {
+		return err
+	}
+	dockerCfg, dockerWarn := config.LoadDocker(projectRoot)
+	if dockerWarn != nil {
+		braidlog.Warn("%v", dockerWarn)
+	}
+
+	if err := sandbox.BuildImage(ctx, projectRoot, dockerCfg); err != nil {
 		return err
 	}
 	braidlog.OK("image rebuilt: %s", sandbox.ImageName)

@@ -52,7 +52,7 @@ func (r *DockerRunner) RunAgent(ctx context.Context, agent config.AgentName, mod
 	}
 	r.mu.Unlock()
 
-	if err := EnsureImage(ctx); err != nil {
+	if err := EnsureImage(ctx, r.projectRoot, r.docker); err != nil {
 		return "", err
 	}
 

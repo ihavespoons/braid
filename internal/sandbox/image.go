@@ -63,8 +63,10 @@ func ImageExists(ctx context.Context) (bool, error) {
 }
 
 // EnsureImage builds the sandbox image if it doesn't already exist.
-// Returns a friendly error if docker is unreachable.
-func EnsureImage(ctx context.Context) error {
+// Returns a friendly error if docker is unreachable. projectRoot is used
+// to resolve a relative dc.Dockerfile path; either may be zero-valued to
+// use the embedded Dockerfile.
+func EnsureImage(ctx context.Context, projectRoot string, dc config.DockerConfig) error {
 	if err := DockerAvailable(ctx); err != nil {
 		return err
 	}
@@ -75,14 +77,21 @@ func EnsureImage(ctx context.Context) error {
 	if exists {
 		return nil
 	}
-	return BuildImage(ctx)
+	return BuildImage(ctx, projectRoot, dc)
 }
 
 // BuildImage forces a rebuild of the sandbox image. Used by `braid rebuild`.
 // Writes Dockerfile + entrypoint.sh to a temp directory and invokes
-// `docker build`, streaming output to the caller's stderr.
-func BuildImage(ctx context.Context) error {
+// `docker build`, streaming output to the caller's stderr. If
+// dc.Dockerfile is set, it is read (relative to projectRoot when not
+// absolute) and used in place of the embedded Dockerfile.
+func BuildImage(ctx context.Context, projectRoot string, dc config.DockerConfig) error {
 	if err := DockerAvailable(ctx); err != nil {
+		return err
+	}
+
+	dockerfile, source, err := resolveDockerfile(projectRoot, dc)
+	if err != nil {
 		return err
 	}
 
@@ -92,11 +101,15 @@ func BuildImage(ctx context.Context) error {
 	}
 	defer os.RemoveAll(buildCtx)
 
-	if err := os.WriteFile(filepath.Join(buildCtx, "Dockerfile"), dockerfileContent, 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(buildCtx, "Dockerfile"), dockerfile, 0o644); err != nil {
 		return err
 	}
 	if err := os.WriteFile(filepath.Join(buildCtx, "entrypoint.sh"), entrypointContent, 0o755); err != nil {
 		return err
+	}
+
+	if source != "" {
+		fmt.Fprintf(os.Stderr, "[braid] building sandbox image from custom Dockerfile: %s\n", source)
 	}
 
 	cmd := exec.CommandContext(ctx, "docker", "build", "-t", ImageName, buildCtx)
@@ -106,6 +119,24 @@ func BuildImage(ctx context.Context) error {
 		return fmt.Errorf("docker build failed: %w", err)
 	}
 	return nil
+}
+
+// resolveDockerfile returns the Dockerfile bytes and, when a custom one
+// is used, the resolved path (for logging). An empty source means the
+// embedded default was used.
+func resolveDockerfile(projectRoot string, dc config.DockerConfig) ([]byte, string, error) {
+	if dc.Dockerfile == "" {
+		return dockerfileContent, "", nil
+	}
+	path := dc.Dockerfile
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(projectRoot, path)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, "", fmt.Errorf("reading custom Dockerfile %s: %w", path, err)
+	}
+	return data, path, nil
 }
 
 // RemoveImage deletes the sandbox image if present.

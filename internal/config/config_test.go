@@ -102,3 +102,19 @@ func TestLoadDockerUnrestricted(t *testing.T) {
 		t.Errorf("AllowedHosts: got %v", cfg.Network.AllowedHosts)
 	}
 }
+
+func TestLoadDockerCustomDockerfile(t *testing.T) {
+	dir := t.TempDir()
+	braidDir := filepath.Join(dir, ".braid")
+	_ = os.MkdirAll(braidDir, 0o755)
+	data := `{"dockerfile":".braid/Dockerfile.custom"}`
+	_ = os.WriteFile(filepath.Join(braidDir, "docker.json"), []byte(data), 0o644)
+
+	cfg, err := LoadDocker(dir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Dockerfile != ".braid/Dockerfile.custom" {
+		t.Errorf("Dockerfile: got %q, want .braid/Dockerfile.custom", cfg.Dockerfile)
+	}
+}

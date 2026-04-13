@@ -124,13 +124,22 @@ that step. `iterate` falls back to `work` and `ralph` falls back to `gate`.
   "network": {
     "mode": "restricted",
     "allowedHosts": ["api.anthropic.com"]
-  }
+  },
+  "dockerfile": ".braid/Dockerfile"
 }
 ```
 
 Only consulted when `--sandbox docker` is active. Restricted mode uses
 iptables in the container to deny all egress except DNS and HTTPS to the
 allowlist.
+
+`dockerfile` is optional. When set, the given path (relative to the
+project root, or absolute) replaces the embedded Dockerfile when building
+`braid-sandbox:latest`. The build context still includes the embedded
+`entrypoint.sh`, so a custom Dockerfile must `COPY entrypoint.sh
+/usr/local/bin/entrypoint.sh`, create a `braid` user, and set the
+entrypoint — the simplest approach is to copy the default and add layers
+on top. Run `braid rebuild` after changing the Dockerfile or this path.
 
 ### Flags
 

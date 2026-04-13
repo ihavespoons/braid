@@ -42,10 +42,6 @@ func runShell(cmd *cobra.Command, args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	if err := sandbox.EnsureImage(ctx); err != nil {
-		return err
-	}
-
 	projectRoot, err := os.Getwd()
 	if err != nil {
 		return err
@@ -57,6 +53,10 @@ func runShell(cmd *cobra.Command, args []string) error {
 	}
 	if shellUnrestricted {
 		dockerCfg.Network.Mode = config.DockerNetworkUnrestricted
+	}
+
+	if err := sandbox.EnsureImage(ctx, projectRoot, dockerCfg); err != nil {
+		return err
 	}
 
 	// Build run args. Interactive when no trailing command, non-interactive
