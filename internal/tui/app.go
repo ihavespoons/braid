@@ -265,24 +265,30 @@ func (m *AppModel) appendLine(s string) {
 }
 
 // resizeViewport recomputes viewport dimensions from current width/height
-// and the visibility of the prompt panel.
+// and the visibility of the prompt panel. The viewport is sized to the
+// *inner* width of the main pane (i.e. main visual width minus styleMain's
+// horizontal frame), so that the rendered viewport fits exactly.
 func (m *AppModel) resizeViewport() {
 	if m.width == 0 || m.height == 0 {
 		return
 	}
-	sw := sidebarWidth(m.width)
-	mainW := m.width - sw - 2 // sidebar border + main padding
-	if mainW < 10 {
-		mainW = 10
+	mainTotal := m.width - sidebarWidth(m.width)
+	mainInner := mainTotal - styleMain.GetHorizontalFrameSize()
+	if mainInner < 10 {
+		mainInner = 10
 	}
 	contentH := m.contentHeight()
+	innerH := contentH - styleMain.GetVerticalFrameSize()
+	if innerH < 3 {
+		innerH = 3
+	}
 	if !m.viewportInit {
-		m.viewport = viewport.New(mainW, contentH)
+		m.viewport = viewport.New(mainInner, innerH)
 		m.viewport.MouseWheelEnabled = true
 		m.viewportInit = true
 	} else {
-		m.viewport.Width = mainW
-		m.viewport.Height = contentH
+		m.viewport.Width = mainInner
+		m.viewport.Height = innerH
 	}
 }
 
@@ -347,7 +353,7 @@ func (m *AppModel) renderBanner() string {
 	if m.phase != "" {
 		title += "   " + stylePhase.Render(m.phase)
 	}
-	return styleBannerBar.Width(m.width).Render(title)
+	return boxRender(styleBannerBar, m.width, 0, title)
 }
 
 func (m *AppModel) renderSidebar() string {
@@ -390,7 +396,7 @@ func (m *AppModel) renderSidebar() string {
 		b.WriteString("\n")
 	}
 
-	return styleSidebar.Width(sw).Height(contentH).Render(b.String())
+	return boxRender(styleSidebar, sw, contentH, b.String())
 }
 
 func (m *AppModel) renderStepLine(s stepEntry) string {
@@ -429,12 +435,11 @@ func (m *AppModel) renderStepLine(s stepEntry) string {
 }
 
 func (m *AppModel) renderMain() string {
-	mw := m.width - sidebarWidth(m.width) - 2
-	if mw < 10 {
-		mw = 10
+	mainTotal := m.width - sidebarWidth(m.width)
+	if mainTotal < 10 {
+		mainTotal = 10
 	}
-	contentH := m.contentHeight()
-	return styleMain.Width(mw).Height(contentH).Render(m.viewport.View())
+	return boxRender(styleMain, mainTotal, m.contentHeight(), m.viewport.View())
 }
 
 // renderPromptPanel returns a panel of exactly promptPanelRows rows so the
@@ -454,7 +459,7 @@ func (m *AppModel) renderPromptPanel(width int) string {
 		body += fmt.Sprintf("\n… (%d more lines)", more)
 	}
 	header := styleStepMeta.Render("prompt (toggle with 'p')")
-	panel := stylePromptPanel.Width(width - 2).Render(header + "\n" + body)
+	panel := boxRender(stylePromptPanel, width, 0, header+"\n"+body)
 	return clampToRows(panel, promptPanelRows)
 }
 
@@ -494,14 +499,15 @@ func (m *AppModel) renderStatusBar() string {
 	}
 	right := styleFooter.Render("q quit · ↑↓ scroll · p prompt · ? help")
 
+	innerW := m.width - styleStatusBar.GetHorizontalFrameSize()
 	leftW := lipgloss.Width(left)
 	rightW := lipgloss.Width(right)
-	gap := m.width - leftW - rightW - 2
+	gap := innerW - leftW - rightW
 	if gap < 1 {
 		gap = 1
 	}
 	bar := left + strings.Repeat(" ", gap) + right
-	return styleStatusBar.Width(m.width).Render(bar)
+	return boxRender(styleStatusBar, m.width, 0, bar)
 }
 
 func (m *AppModel) contentHeight() int {
@@ -554,17 +560,40 @@ func overlay(bg, fg string, w, h int) string {
 	return lipgloss.Place(w, h, lipgloss.Center, lipgloss.Center, fg)
 }
 
+// sidebarWidth returns the *total visual* width of the sidebar column,
+// inclusive of border and padding. The caller subtracts the style's
+// frame size when computing the inner content area.
 func sidebarWidth(total int) int {
 	w := total / 4
-	if w < 22 {
-		w = 22
+	if w < 25 {
+		w = 25
 	}
-	if w > 36 {
-		w = 36
+	if w > 40 {
+		w = 40
 	}
 	if w > total/2 {
 		w = total / 2
 	}
 	return w
+}
+
+// boxRender renders content inside style at exactly totalW × totalH
+// visual cells, accounting for the style's border + padding overhead so
+// the rendered block fits the layout precisely. totalH=0 leaves height
+// unset (auto-sized to content).
+func boxRender(style lipgloss.Style, totalW, totalH int, content string) string {
+	innerW := totalW - style.GetHorizontalFrameSize()
+	if innerW < 1 {
+		innerW = 1
+	}
+	s := style.Width(innerW)
+	if totalH > 0 {
+		innerH := totalH - style.GetVerticalFrameSize()
+		if innerH < 1 {
+			innerH = 1
+		}
+		s = s.Height(innerH)
+	}
+	return s.Render(content)
 }
 

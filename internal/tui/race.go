@@ -168,10 +168,7 @@ func (m *RaceModel) resizePanels() {
 		contentH = 3
 	}
 	panelW := m.width / n
-	if panelW < 20 {
-		panelW = 20
-	}
-	innerW := panelW - 2 // padding
+	innerW := panelW - styleSidebar.GetHorizontalFrameSize()
 	if innerW < 10 {
 		innerW = 10
 	}
@@ -203,13 +200,10 @@ func (m *RaceModel) View() string {
 		return styleBanner.Render("▰▰ " + m.title + " ▰▰")
 	}
 
-	banner := styleBannerBar.Width(m.width).Render("▰▰ " + m.title + " ▰▰")
+	banner := boxRender(styleBannerBar, m.width, 0, "▰▰ "+m.title+" ▰▰")
 
 	panels := make([]string, len(m.runs))
 	panelW := m.width / len(m.runs)
-	if panelW < 20 {
-		panelW = 20
-	}
 	for i, r := range m.runs {
 		panels[i] = m.renderPanel(r, panelW)
 	}
@@ -280,7 +274,7 @@ func (m *RaceModel) renderPanel(r *raceRun, width int) string {
 	}
 
 	panel := lipgloss.JoinVertical(lipgloss.Left, header, meta, body)
-	return styleSidebar.Width(width).Render(panel)
+	return boxRender(styleSidebar, width, 0, panel)
 }
 
 func (m *RaceModel) renderStatusBar() string {
@@ -295,11 +289,12 @@ func (m *RaceModel) renderStatusBar() string {
 		left = spinner + " composition running"
 	}
 	right := styleFooter.Render("q quit · ? help")
+	innerW := m.width - styleStatusBar.GetHorizontalFrameSize()
 	leftW := lipgloss.Width(left)
 	rightW := lipgloss.Width(right)
-	gap := m.width - leftW - rightW - 2
+	gap := innerW - leftW - rightW
 	if gap < 1 {
 		gap = 1
 	}
-	return styleStatusBar.Width(m.width).Render(left + strings.Repeat(" ", gap) + right)
+	return boxRender(styleStatusBar, m.width, 0, left+strings.Repeat(" ", gap)+right)
 }
