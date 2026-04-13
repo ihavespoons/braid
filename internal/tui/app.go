@@ -5,7 +5,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 // tickMsg drives the spinner animation.
@@ -15,151 +17,164 @@ func tick() tea.Cmd {
 	return tea.Tick(100*time.Millisecond, func(t time.Time) tea.Msg { return tickMsg(t) })
 }
 
-// maxVisibleLines bounds the scrollback pane. Older lines are dropped to
-// keep the view steady-height and avoid unbounded memory growth during
-// long-running agent sessions.
-const maxVisibleLines = 20
+// maxScrollback bounds the in-memory output history. The viewport renders
+// from this slice; older lines drop off the front when the cap is hit.
+const maxScrollback = 5000
+
+type stepState int
+
+const (
+	stepRunning stepState = iota
+	stepDone
+	stepWarn
+	stepError
+)
+
+type stepEntry struct {
+	name      string
+	agent     string
+	model     string
+	iteration int
+	maxIter   int
+	state     stepState
+	verdict   string
+}
 
 // AppModel is the bubbletea model for single-run execution.
 type AppModel struct {
 	title string
 
-	// Current state
-	phase     string
-	step      string
-	agent     string
-	model     string
-	iteration int
-	maxIter   int
+	phase  string
+	steps  []stepEntry
+	prompt string
 
-	// Scrollback of streamed output lines
 	lines []string
 
-	// Status lines appended below the streaming pane
-	status []string
+	retryCount int
+	waiting    *WaitingEvent
+	lastError  string
 
-	// Last rendered prompt (shown in a folded panel when ShowRequest).
-	prompt      string
-	showRequest bool
-
-	// Spinner
 	spinnerFrame int
 	spinning     bool
 
-	// Terminal state
 	width  int
 	height int
 
-	// Lifecycle
+	viewport     viewport.Model
+	viewportInit bool
+	showPrompt   bool
+	showHelp     bool
+
 	done     bool
+	verdict  string
 	finalMsg string
 }
 
-// WithShowRequest enables rendering of the most-recent prompt in a folded
-// panel above the streaming output.
+// WithShowRequest sets the initial visibility of the prompt panel. Users
+// can also toggle it interactively with `p`.
 func (m *AppModel) WithShowRequest(v bool) *AppModel {
-	m.showRequest = v
+	m.showPrompt = v
 	return m
 }
 
-// NewAppModel constructs an initial model ready to be Run() by a tea.Program.
 func NewAppModel(title string) *AppModel {
 	return &AppModel{
 		title:    title,
-		lines:    make([]string, 0, maxVisibleLines),
-		status:   make([]string, 0, 8),
+		lines:    make([]string, 0, 256),
+		steps:    make([]stepEntry, 0, 16),
 		spinning: true,
 	}
 }
 
-// Init is the bubbletea entry hook.
 func (m *AppModel) Init() tea.Cmd {
 	return tick()
 }
 
-// Update handles messages from bubbletea and incoming braid events.
 func (m *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	var cmds []tea.Cmd
+
 	switch v := msg.(type) {
 	case tea.KeyMsg:
 		switch v.String() {
 		case "ctrl+c", "q":
 			return m, tea.Quit
+		case "p":
+			m.showPrompt = !m.showPrompt
+			m.resizeViewport()
+			m.refreshViewport()
+			return m, nil
+		case "?":
+			m.showHelp = !m.showHelp
+			return m, nil
 		}
 
 	case tea.WindowSizeMsg:
 		m.width = v.Width
 		m.height = v.Height
+		m.resizeViewport()
+		m.refreshViewport()
+
+	case tea.MouseMsg:
+		// Forward to viewport for scroll-wheel handling.
 
 	case tickMsg:
 		if m.spinning {
 			m.spinnerFrame = (m.spinnerFrame + 1) % len(spinnerFrames)
 		}
 		if !m.done {
-			return m, tick()
+			cmds = append(cmds, tick())
 		}
-		return m, nil
 
 	case PhaseEvent:
 		m.phase = v.Title
-		// Clear per-phase output noise so the next iteration starts fresh.
-		m.lines = m.lines[:0]
 
 	case StepEvent:
-		m.step = v.Step
-		m.agent = v.Agent
-		m.model = v.Model
-		if v.Iteration > 0 {
-			m.iteration = v.Iteration
-			m.maxIter = v.MaxIterations
-		}
+		m.appendStep(v)
 		m.spinning = true
 
 	case LineEvent:
-		m.lines = append(m.lines, v.Text)
-		if len(m.lines) > maxVisibleLines {
-			m.lines = m.lines[len(m.lines)-maxVisibleLines:]
-		}
+		m.appendLine(v.Text)
 
 	case PromptEvent:
 		m.prompt = v.Text
+		if m.showPrompt {
+			m.resizeViewport()
+			m.refreshViewport()
+		}
 
 	case GateEvent:
-		line := fmt.Sprintf("Gate: %s", v.Verdict)
-		if v.Message != "" {
-			line += " — " + v.Message
-		}
-		switch v.Verdict {
-		case "DONE":
-			m.status = append(m.status, styleOK.Render("✓ "+line))
-		case "MAX_ITERATIONS":
-			m.status = append(m.status, styleWarn.Render("⚠ "+line))
-		default:
-			m.status = append(m.status, styleWarn.Render("⚠ "+line))
-		}
+		m.markGate(v)
 
 	case LogEvent:
 		switch v.Level {
 		case "warn":
-			m.status = append(m.status, styleWarn.Render("⚠ "+v.Text))
+			m.appendLine(styleWarn.Render("⚠ " + v.Text))
 		case "error":
-			m.status = append(m.status, styleError.Render("✗ "+v.Text))
+			m.appendLine(styleError.Render("✗ " + v.Text))
+			m.lastError = v.Text
 		default:
-			m.status = append(m.status, styleStepMeta.Render("  "+v.Text))
+			m.appendLine(styleStepMeta.Render("  " + v.Text))
 		}
 
 	case WaitingEvent:
-		msg := fmt.Sprintf("Rate limited; retry at %s (attempt %d)", v.NextRetryAt.Format("15:04:05"), v.Attempt)
-		m.status = append(m.status, styleWarn.Render("⚠ "+msg))
+		w := v
+		m.waiting = &w
 
 	case RetryEvent:
-		m.status = append(m.status, styleStepMeta.Render(fmt.Sprintf("  retrying (attempt %d)...", v.Attempt)))
+		m.retryCount = v.Attempt
+		m.waiting = nil
 
 	case ErrorEvent:
-		m.status = append(m.status, styleError.Render("✗ "+v.Err))
+		m.lastError = v.Err
+		m.appendLine(styleError.Render("✗ " + v.Err))
+		if n := len(m.steps); n > 0 {
+			m.steps[n-1].state = stepError
+		}
 
 	case DoneEvent:
 		m.done = true
 		m.spinning = false
+		m.verdict = v.Verdict
 		switch v.Verdict {
 		case "DONE":
 			m.finalMsg = styleOK.Render(fmt.Sprintf("✓ Completed in %d iteration(s)", v.Iterations))
@@ -176,89 +191,355 @@ func (m *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 	}
 
-	return m, nil
+	// Forward unhandled key/mouse events to the viewport for scroll bindings.
+	atBottom := !m.viewportInit || m.viewport.AtBottom()
+	if m.viewportInit {
+		var vpCmd tea.Cmd
+		m.viewport, vpCmd = m.viewport.Update(msg)
+		if vpCmd != nil {
+			cmds = append(cmds, vpCmd)
+		}
+		// If the user wasn't manually scrolled, keep pinned to bottom.
+		if atBottom {
+			m.viewport.GotoBottom()
+		}
+	}
+
+	return m, tea.Batch(cmds...)
 }
 
-// View renders the model to a string.
+func (m *AppModel) appendStep(e StepEvent) {
+	entry := stepEntry{
+		name:      e.Step,
+		agent:     e.Agent,
+		model:     e.Model,
+		iteration: e.Iteration,
+		maxIter:   e.MaxIterations,
+		state:     stepRunning,
+	}
+	// Mark the previous step done if it was still running.
+	if n := len(m.steps); n > 0 && m.steps[n-1].state == stepRunning {
+		m.steps[n-1].state = stepDone
+	}
+	m.steps = append(m.steps, entry)
+}
+
+func (m *AppModel) markGate(g GateEvent) {
+	n := len(m.steps)
+	if n == 0 {
+		return
+	}
+	s := &m.steps[n-1]
+	s.verdict = g.Verdict
+	switch g.Verdict {
+	case "DONE":
+		s.state = stepDone
+	case "MAX_ITERATIONS":
+		s.state = stepWarn
+	default:
+		s.state = stepDone
+	}
+	line := fmt.Sprintf("Gate: %s", g.Verdict)
+	if g.Message != "" {
+		line += " — " + g.Message
+	}
+	switch g.Verdict {
+	case "DONE":
+		m.appendLine(styleOK.Render("✓ " + line))
+	case "MAX_ITERATIONS":
+		m.appendLine(styleWarn.Render("⚠ " + line))
+	default:
+		m.appendLine(styleStepMeta.Render("• " + line))
+	}
+}
+
+func (m *AppModel) appendLine(s string) {
+	m.lines = append(m.lines, s)
+	if len(m.lines) > maxScrollback {
+		m.lines = m.lines[len(m.lines)-maxScrollback:]
+	}
+	m.refreshViewport()
+}
+
+// resizeViewport recomputes viewport dimensions from current width/height
+// and the visibility of the prompt panel.
+func (m *AppModel) resizeViewport() {
+	if m.width == 0 || m.height == 0 {
+		return
+	}
+	sw := sidebarWidth(m.width)
+	mainW := m.width - sw - 2 // sidebar border + main padding
+	if mainW < 10 {
+		mainW = 10
+	}
+	bannerH := 2  // banner + bottom border
+	statusH := 1  // single status line
+	promptH := 0
+	if m.showPrompt && m.prompt != "" {
+		promptH = promptPanelHeight(m.prompt)
+	}
+	contentH := m.height - bannerH - statusH - promptH
+	if contentH < 3 {
+		contentH = 3
+	}
+	if !m.viewportInit {
+		m.viewport = viewport.New(mainW, contentH)
+		m.viewport.MouseWheelEnabled = true
+		m.viewportInit = true
+	} else {
+		m.viewport.Width = mainW
+		m.viewport.Height = contentH
+	}
+}
+
+func (m *AppModel) refreshViewport() {
+	if !m.viewportInit {
+		return
+	}
+	m.viewport.SetContent(strings.Join(m.lines, "\n"))
+}
+
 func (m *AppModel) View() string {
-	var b strings.Builder
+	if m.width == 0 || m.height == 0 {
+		// Pre-resize: render a minimal placeholder so the alt-screen
+		// has something while we wait for the first WindowSizeMsg.
+		return styleBanner.Render("▰▰ " + m.title + " ▰▰")
+	}
 
-	// Banner
-	b.WriteString(styleBanner.Render("▰▰ " + m.title + " ▰▰"))
-	b.WriteString("\n")
+	if m.showHelp {
+		return m.renderWithHelpOverlay()
+	}
 
-	// Phase header
+	banner := m.renderBanner()
+	sidebar := m.renderSidebar()
+	main := m.renderMain()
+	body := lipgloss.JoinHorizontal(lipgloss.Top, sidebar, main)
+	status := m.renderStatusBar()
+	return lipgloss.JoinVertical(lipgloss.Left, banner, body, status)
+}
+
+func (m *AppModel) renderBanner() string {
+	title := "▰▰ " + m.title + " ▰▰"
 	if m.phase != "" {
-		b.WriteString(stylePhase.Render(m.phase))
+		title += "   " + stylePhase.Render(m.phase)
+	}
+	return styleBannerBar.Width(m.width).Render(title)
+}
+
+func (m *AppModel) renderSidebar() string {
+	sw := sidebarWidth(m.width)
+	contentH := m.contentHeight()
+
+	var b strings.Builder
+	b.WriteString(styleSidebarTitle.Render("Steps"))
+	b.WriteString("\n")
+	for _, s := range m.steps {
+		b.WriteString(m.renderStepLine(s))
 		b.WriteString("\n")
 	}
 
-	// Step indicator (with spinner)
-	if m.step != "" {
+	// Active step meta (agent/model/iteration) for the trailing entry.
+	if n := len(m.steps); n > 0 {
+		s := m.steps[n-1]
+		b.WriteString("\n")
+		if s.agent != "" {
+			b.WriteString(styleStepMeta.Render("Agent:  ") + s.agent + "\n")
+		}
+		if s.model != "" {
+			b.WriteString(styleStepMeta.Render("Model:  ") + s.model + "\n")
+		}
+		if s.maxIter > 0 {
+			b.WriteString(styleStepMeta.Render("Iter:   ") +
+				fmt.Sprintf("%d/%d\n", s.iteration, s.maxIter))
+		}
+	}
+	if m.retryCount > 0 {
+		b.WriteString(styleStepMeta.Render("Retries:") +
+			fmt.Sprintf(" %d\n", m.retryCount))
+	}
+	if m.waiting != nil {
+		secs := time.Until(m.waiting.NextRetryAt).Round(time.Second).Seconds()
+		if secs < 0 {
+			secs = 0
+		}
+		b.WriteString(styleWarn.Render(fmt.Sprintf("Wait:    %.0fs", secs)))
+		b.WriteString("\n")
+	}
+
+	return styleSidebar.Width(sw).Height(contentH).Render(b.String())
+}
+
+func (m *AppModel) renderStepLine(s stepEntry) string {
+	var icon string
+	switch s.state {
+	case stepDone:
+		icon = styleStepDone.Render("✓")
+	case stepWarn:
+		icon = styleStepWarn.Render("⚠")
+	case stepError:
+		icon = styleStepError.Render("✗")
+	default:
+		if m.spinning {
+			icon = styleSpinner.Render(spinnerFrames[m.spinnerFrame])
+		} else {
+			icon = styleStepPending.Render("·")
+		}
+	}
+	label := s.name
+	if s.maxIter > 0 {
+		label += fmt.Sprintf(" [%d/%d]", s.iteration, s.maxIter)
+	}
+	switch s.state {
+	case stepRunning:
+		label = styleStepRunning.Render(label)
+	case stepDone:
+		label = styleStepDone.Render(label)
+	case stepWarn:
+		label = styleStepWarn.Render(label)
+	case stepError:
+		label = styleStepError.Render(label)
+	default:
+		label = styleStepPending.Render(label)
+	}
+	return icon + " " + label
+}
+
+func (m *AppModel) renderMain() string {
+	mw := m.width - sidebarWidth(m.width) - 2
+	if mw < 10 {
+		mw = 10
+	}
+	contentH := m.contentHeight()
+
+	parts := []string{}
+	if m.showPrompt && m.prompt != "" {
+		parts = append(parts, m.renderPromptPanel(mw))
+	}
+	parts = append(parts, m.viewport.View())
+
+	body := lipgloss.JoinVertical(lipgloss.Left, parts...)
+	return styleMain.Width(mw).Height(contentH).Render(body)
+}
+
+func (m *AppModel) renderPromptPanel(width int) string {
+	const maxLines = 6
+	lines := strings.Split(m.prompt, "\n")
+	shown := lines
+	more := 0
+	if len(lines) > maxLines {
+		shown = lines[:maxLines]
+		more = len(lines) - maxLines
+	}
+	body := strings.Join(shown, "\n")
+	if more > 0 {
+		body += fmt.Sprintf("\n… (%d more lines)", more)
+	}
+	header := styleStepMeta.Render("prompt (toggle with 'p')")
+	return stylePromptPanel.Width(width - 2).Render(header + "\n" + body)
+}
+
+func (m *AppModel) renderStatusBar() string {
+	left := ""
+	if m.done {
+		left = m.finalMsg
+	} else {
 		spinner := " "
 		if m.spinning {
 			spinner = styleSpinner.Render(spinnerFrames[m.spinnerFrame])
 		}
-		meta := ""
-		if m.agent != "" {
-			meta = fmt.Sprintf(" — agent=%s", m.agent)
-			if m.model != "" {
-				meta += " model=" + m.model
+		phase := m.phase
+		if phase == "" {
+			phase = "running"
+		}
+		left = spinner + " " + phase
+		if m.retryCount > 0 {
+			left += styleStepMeta.Render(fmt.Sprintf("  retries:%d", m.retryCount))
+		}
+		if m.waiting != nil {
+			secs := time.Until(m.waiting.NextRetryAt).Round(time.Second).Seconds()
+			if secs < 0 {
+				secs = 0
 			}
+			left += styleWarn.Render(fmt.Sprintf("  rate-limited %.0fs", secs))
 		}
-		iter := ""
-		if m.maxIter > 0 {
-			iter = fmt.Sprintf(" [%d/%d]", m.iteration, m.maxIter)
-		}
-		b.WriteString(fmt.Sprintf("%s %s%s%s\n",
-			spinner,
-			styleStep.Render(m.step),
-			styleStepMeta.Render(meta),
-			styleStepMeta.Render(iter),
-		))
 	}
+	right := styleFooter.Render("q quit · ↑↓ scroll · p prompt · ? help")
 
-	// Folded prompt panel (when --show-request is active)
-	if m.showRequest && m.prompt != "" {
-		b.WriteString(styleStepMeta.Render("── prompt ──"))
-		b.WriteString("\n")
-		// Show first N lines of the prompt only to keep the panel compact.
-		promptLines := strings.Split(m.prompt, "\n")
-		const maxPromptLines = 8
-		for i, line := range promptLines {
-			if i >= maxPromptLines {
-				b.WriteString(styleStepMeta.Render(fmt.Sprintf("  … (%d more lines)", len(promptLines)-maxPromptLines)))
-				b.WriteString("\n")
-				break
-			}
-			b.WriteString(styleStepMeta.Render("  " + line))
-			b.WriteString("\n")
-		}
-		b.WriteString(styleStepMeta.Render("────────────"))
-		b.WriteString("\n")
+	leftW := lipgloss.Width(left)
+	rightW := lipgloss.Width(right)
+	gap := m.width - leftW - rightW - 2
+	if gap < 1 {
+		gap = 1
 	}
+	bar := left + strings.Repeat(" ", gap) + right
+	return styleStatusBar.Width(m.width).Render(bar)
+}
 
-	// Streaming output
-	for _, line := range m.lines {
-		b.WriteString(styleOutput.Render(line))
-		b.WriteString("\n")
+func (m *AppModel) contentHeight() int {
+	bannerH := 2
+	statusH := 1
+	h := m.height - bannerH - statusH
+	if h < 3 {
+		h = 3
 	}
+	return h
+}
 
-	// Status lines
-	for _, s := range m.status {
-		b.WriteString(s)
-		b.WriteString("\n")
+func (m *AppModel) renderWithHelpOverlay() string {
+	base := func() string {
+		showHelp := m.showHelp
+		m.showHelp = false
+		s := m.View()
+		m.showHelp = showHelp
+		return s
+	}()
+	help := styleHelpOverlay.Render(strings.Join([]string{
+		styleSidebarTitle.Render("Keybindings"),
+		"",
+		"q, ctrl+c    quit",
+		"p            toggle prompt panel",
+		"?            toggle this help",
+		"↑ ↓          scroll one line",
+		"pgup pgdn    scroll one page",
+		"g G          jump to top / bottom",
+		"mouse wheel  scroll",
+	}, "\n"))
+	return overlay(base, help, m.width, m.height)
+}
+
+// overlay places the foreground centered over the background. It returns the
+// background unchanged if the foreground would not fit.
+func overlay(bg, fg string, w, h int) string {
+	fgW := lipgloss.Width(fg)
+	fgH := lipgloss.Height(fg)
+	if fgW > w || fgH > h {
+		return bg
 	}
+	// lipgloss.Place draws the fg centered on a blank canvas; we then
+	// render that canvas on top of the background by replacing the
+	// middle rows. For simplicity we just use Place over the bg lines.
+	return lipgloss.Place(w, h, lipgloss.Center, lipgloss.Center, fg)
+}
 
-	// Footer
-	if m.done {
-		b.WriteString("\n")
-		b.WriteString(m.finalMsg)
-		b.WriteString("\n")
-	} else {
-		b.WriteString(styleFooter.Render("press q or Ctrl+C to quit"))
-		b.WriteString("\n")
+func sidebarWidth(total int) int {
+	w := total / 4
+	if w < 22 {
+		w = 22
 	}
+	if w > 36 {
+		w = 36
+	}
+	if w > total/2 {
+		w = total / 2
+	}
+	return w
+}
 
-	return b.String()
+func promptPanelHeight(prompt string) int {
+	const maxLines = 6
+	n := strings.Count(prompt, "\n") + 1
+	if n > maxLines {
+		n = maxLines + 1 // +1 for "… (N more)"
+	}
+	return n + 3 // header + 2 borders
 }

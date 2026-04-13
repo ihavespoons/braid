@@ -115,7 +115,12 @@ func runWithTUI(
 	} else {
 		model = tui.NewAppModel("Braid — " + sessionHeader(session.Path)).WithShowRequest(ec.ShowRequest)
 	}
-	p := tea.NewProgram(model, tea.WithContext(ctx), tea.WithOutput(os.Stderr))
+	p := tea.NewProgram(
+		model,
+		tea.WithContext(ctx),
+		tea.WithAltScreen(),
+		tea.WithMouseCellMotion(),
+	)
 
 	// Pump events from the executor into the tea Program. Runs for the
 	// lifetime of the channel.
@@ -166,6 +171,8 @@ func runWithTUI(
 	}
 	<-done
 	_ = pool.StopAll()
+	// Print final status to the restored terminal so it persists in scrollback.
+	printFinalStatus(execResult)
 	return execErr
 }
 
