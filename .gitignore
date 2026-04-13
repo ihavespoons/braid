@@ -1,0 +1,15 @@
+# Compiled binary
+/braid
+
+# Editor / OS
+.DS_Store
+*.swp
+
+# Go build artifacts
+*.test
+*.out
+coverage.html
+
+# braid runtime state — generated per-user, not meant for source control.
+# Remove this line if you want to check in project-wide config defaults.
+.braid/
