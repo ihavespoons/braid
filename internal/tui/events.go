@@ -100,14 +100,13 @@ func (ErrorEvent) eventMarker()   {}
 type Emitter chan<- Event
 
 // Send delivers e if the channel is non-nil; otherwise it's a no-op.
-// Non-blocking send keeps the executor moving if the TUI consumer is slow —
-// the TUI is a best-effort display, not a correctness boundary.
+// The send is blocking so that bursts of streaming output (e.g. agent
+// stdout during a long ralph task) backpressure the executor instead of
+// being silently dropped. The channel is buffered for smoothing; the TUI
+// pumper drains it into bubbletea as fast as it can render.
 func (e Emitter) Send(ev Event) {
 	if e == nil {
 		return
 	}
-	select {
-	case e <- ev:
-	default:
-	}
+	e <- ev
 }

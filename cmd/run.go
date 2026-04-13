@@ -80,7 +80,7 @@ func runDefault(args []string) error {
 	// --- TUI vs plain-log selection ---
 	useTUI := isatty.IsTerminal(os.Stdout.Fd()) && os.Getenv("BRAID_NO_TUI") == ""
 
-	events := make(chan tui.Event, 64)
+	events := make(chan tui.Event, 1024)
 	stepConfig := executor.ResolveStepConfig(&cfg, &flags)
 	ec := &executor.ExecutionContext{
 		ProjectRoot: projectRoot,
@@ -115,6 +115,13 @@ func runWithTUI(
 	} else {
 		model = tui.NewAppModel("Braid — " + sessionHeader(session.Path)).WithShowRequest(ec.ShowRequest)
 	}
+
+	// The executor runs under its own cancellable context so that quitting
+	// the TUI (q/ctrl+c) cancels in-flight agent subprocesses instead of
+	// leaving them running while main blocks on <-done.
+	execCtx, cancelExec := context.WithCancel(ctx)
+	defer cancelExec()
+
 	p := tea.NewProgram(
 		model,
 		tea.WithContext(ctx),
@@ -122,16 +129,18 @@ func runWithTUI(
 		tea.WithMouseCellMotion(),
 	)
 
-	// Pump events from the executor into the tea Program. Runs for the
-	// lifetime of the channel.
+	// Pump events from the executor into the tea Program. Drains events
+	// until the channel is closed by the executor goroutine.
+	pumperDone := make(chan struct{})
 	go func() {
+		defer close(pumperDone)
 		for ev := range events {
 			p.Send(ev)
 		}
 	}()
 
-	// Run the executor in a goroutine so we can start the bubbletea loop
-	// on the main goroutine (required for proper TTY handling).
+	// Run the executor in a goroutine so the bubbletea loop can own the
+	// main goroutine (required for proper TTY handling).
 	var (
 		execResult *executor.ExecutionResult
 		execErr    error
@@ -139,10 +148,7 @@ func runWithTUI(
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		execResult, execErr = executor.Execute(ctx, node, ec, pool, session)
-		// Emit DoneEvent so the TUI can transition to its final view
-		// and call tea.Quit. We still close events afterward to stop
-		// the pumper goroutine.
+		execResult, execErr = executor.Execute(execCtx, node, ec, pool, session)
 		verdict := ""
 		iterations := 0
 		logFile := ""
@@ -153,26 +159,43 @@ func runWithTUI(
 			logFile = execResult.LogFile
 			lastMessage = execResult.LastMessage
 		}
-		if execErr != nil {
+		// These sends use the raw channel (blocking) rather than tui.Emitter
+		// so the final events are guaranteed to reach the TUI before close.
+		// Guard against a closed/cancelled pipeline in case the user already
+		// quit and the pumper has stopped — we fall through to close on
+		// context cancellation.
+		if execErr != nil && execCtx.Err() == nil {
 			events <- tui.ErrorEvent{Err: execErr.Error()}
 		}
-		events <- tui.DoneEvent{
-			LastMessage: lastMessage,
-			LogFile:     logFile,
-			Verdict:     verdict,
-			Iterations:  iterations,
+		if execCtx.Err() == nil {
+			events <- tui.DoneEvent{
+				LastMessage: lastMessage,
+				LogFile:     logFile,
+				Verdict:     verdict,
+				Iterations:  iterations,
+			}
 		}
 		close(events)
 	}()
 
-	if _, err := p.Run(); err != nil {
-		<-done
+	runErr := func() error {
+		_, err := p.Run()
 		return err
-	}
+	}()
+
+	// p.Run() returned: either DoneEvent triggered tea.Quit, the user
+	// pressed q/ctrl+c, or the parent ctx was cancelled. In the user-quit
+	// case, the executor is still running — cancel it so RunAgent returns
+	// and we don't hang on <-done.
+	cancelExec()
 	<-done
+	<-pumperDone
 	_ = pool.StopAll()
 	// Print final status to the restored terminal so it persists in scrollback.
 	printFinalStatus(execResult)
+	if runErr != nil {
+		return runErr
+	}
 	return execErr
 }
 
